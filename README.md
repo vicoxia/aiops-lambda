@@ -61,6 +61,7 @@ graph TD
 - [**需求文档**](.kiro/specs/lambda-auto-repair/requirements.md) - 功能需求和验收标准
 - [**设计文档**](.kiro/specs/lambda-auto-repair/design.md) - 详细的系统设计和接口定义
 - [**实现状态报告**](IMPLEMENTATION_STATUS_REPORT.md) - 当前实现状态和完成度分析
+- [**成本分析报告**](COST_ANALYSIS.md) - 详细的部署和运行成本分析
 
 ### 🛠️ 运维文档
 - [**操作手册**](src/infrastructure/operations-manual.md) - 日常运维和故障处理

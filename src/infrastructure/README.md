@@ -12,29 +12,201 @@ Lambda自动修复系统使用AWS CloudFormation模板部署，组织为三个�
 
 ## 系统架构
 
+### 🏗️ 整体架构图
+
+```mermaid
+graph TB
+    %% 触发层
+    subgraph "🔍 监控与触发层"
+        LF[Lambda Function<br/>被监控函数]
+        CW[CloudWatch<br/>指标监控]
+        AL[CloudWatch Alarms<br/>智能告警]
+        EB[EventBridge<br/>事件总线]
+    end
+    
+    %% 编排层
+    subgraph "🎭 工作流编排层"
+        SF[Step Functions<br/>状态机工作流]
+        SFA[StepFunctions Adapter<br/>事件解析器]
+    end
+    
+    %% 处理层
+    subgraph "⚙️ 核心处理层"
+        DC[Data Collector<br/>数据收集器]
+        DG[Diagnosis<br/>AI智能诊断]
+        RE[Repair Executor<br/>修复执行器]
+        RV[Repair Verifier<br/>修复验证器]
+        CO[Coordinator<br/>流程协调器]
+    end
+    
+    %% AI服务层
+    subgraph "🧠 AI智能服务层"
+        BR[Amazon Bedrock<br/>Claude 3 Sonnet]
+        KB[Knowledge Base<br/>知识库]
+    end
+    
+    %% 存储与通知层
+    subgraph "💾 存储与通知层"
+        DB[DynamoDB<br/>审计日志]
+        SNS[SNS<br/>通知服务]
+        S3[S3<br/>部署存储]
+        KMS[KMS<br/>加密服务]
+    end
+    
+    %% 数据流连接
+    LF --> CW
+    CW --> AL
+    AL --> EB
+    EB --> SF
+    SF --> SFA
+    SFA --> DC
+    DC --> DG
+    DG --> RE
+    RE --> RV
+    RV --> CO
+    CO --> SNS
+    
+    %% AI服务连接
+    DG <--> BR
+    BR <--> KB
+    
+    %% 存储连接
+    RE --> DB
+    RV --> DB
+    CO --> DB
+    SF --> S3
+    DB --> KMS
+    SNS --> KMS
+    
+    %% 样式定义
+    classDef monitoring fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#000
+    classDef orchestration fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef processing fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef ai fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef storage fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#000
+    
+    %% 应用样式
+    class LF,CW,AL,EB monitoring
+    class SF,SFA orchestration
+    class DC,DG,RE,RV,CO processing
+    class BR,KB ai
+    class DB,SNS,S3,KMS storage
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   CloudWatch    │    │   EventBridge   │    │ Step Functions  │
-│     告警        │───▶│   事件总线      │───▶│   工作流        │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                        │
-                                                        ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   事件解析器    │    │   数据收集器    │    │   诊断函数      │
-│   (适配器)      │───▶│                 │───▶│                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                        │
-                                                        ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   验证函数      │◀───│   修复执行器    │◀───│   行动决策      │
-│                 │    │                 │    │   (选择)        │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         ▼                       ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│      SNS        │    │   DynamoDB      │    │   CloudWatch    │
-│     通知        │    │   审计日志      │    │     监控        │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+
+### 🔄 详细工作流程图
+
+```mermaid
+sequenceDiagram
+    participant LF as Lambda Function
+    participant CW as CloudWatch
+    participant EB as EventBridge
+    participant SF as Step Functions
+    participant DC as Data Collector
+    participant DG as Diagnosis
+    participant BR as Bedrock AI
+    participant RE as Repair Executor
+    participant RV as Repair Verifier
+    participant SNS as SNS Notification
+    participant DB as DynamoDB
+    
+    Note over LF,DB: 🚨 异常检测阶段
+    LF->>CW: 发送性能指标
+    CW->>CW: 检测异常模式
+    CW->>EB: 触发告警事件
+    
+    Note over EB,SF: 🎭 工作流启动阶段
+    EB->>SF: 启动修复工作流
+    SF->>DC: 调用数据收集器
+    
+    Note over DC,BR: 📊 数据收集与诊断阶段
+    DC->>CW: 收集详细指标
+    DC->>SF: 返回收集结果
+    SF->>DG: 调用诊断函数
+    DG->>BR: 请求AI分析
+    BR-->>DG: 返回诊断建议
+    DG->>SF: 返回修复方案
+    
+    Note over SF,RV: ⚡ 修复执行阶段
+    SF->>RE: 执行修复操作
+    RE->>LF: 调整函数配置
+    RE->>DB: 记录修复操作
+    RE->>SF: 返回执行结果
+    SF->>RV: 验证修复效果
+    RV->>CW: 检查性能改善
+    RV->>SF: 返回验证结果
+    
+    Note over SF,SNS: 📢 结果通知阶段
+    SF->>SNS: 发送修复报告
+    SNS-->>SNS: 通知相关人员
+```
+
+### 🏛️ 基础设施架构图
+
+```mermaid
+graph LR
+    subgraph "🔐 安全层"
+        IAM[IAM Roles<br/>最小权限]
+        KMS[KMS Keys<br/>数据加密]
+        VPC[VPC<br/>网络隔离]
+    end
+    
+    subgraph "📊 监控层"
+        CWD[CloudWatch<br/>Dashboard]
+        CWA[CloudWatch<br/>Alarms]
+        CWL[CloudWatch<br/>Logs]
+        CWM[CloudWatch<br/>Metrics]
+    end
+    
+    subgraph "🎯 应用层"
+        LambdaFuncs[Lambda Functions<br/>6个核心函数]
+        StepFunc[Step Functions<br/>工作流状态机]
+        EventB[EventBridge<br/>事件路由]
+    end
+    
+    subgraph "💾 数据层"
+        DDB[DynamoDB<br/>审计日志]
+        S3B[S3 Bucket<br/>部署存储]
+        BedrockAI[Bedrock<br/>AI服务]
+    end
+    
+    subgraph "📢 通知层"
+        SNSTopic[SNS Topic<br/>通知服务]
+        Email[Email<br/>邮件通知]
+    end
+    
+    %% 连接关系
+    IAM --> LambdaFuncs
+    IAM --> StepFunc
+    KMS --> DDB
+    KMS --> SNSTopic
+    
+    CWA --> EventB
+    EventB --> StepFunc
+    StepFunc --> LambdaFuncs
+    LambdaFuncs --> DDB
+    LambdaFuncs --> BedrockAI
+    LambdaFuncs --> CWL
+    
+    StepFunc --> SNSTopic
+    SNSTopic --> Email
+    
+    LambdaFuncs --> S3B
+    
+    CWM --> CWD
+    CWL --> CWD
+    
+    %% 样式
+    classDef security fill:#ffebee,stroke:#d32f2f,stroke-width:2px
+    classDef monitoring fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef application fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef data fill:#fff8e1,stroke:#f57c00,stroke-width:2px
+    classDef notification fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    
+    class IAM,KMS,VPC security
+    class CWD,CWA,CWL,CWM monitoring
+    class LambdaFuncs,StepFunc,EventB application
+    class DDB,S3B,BedrockAI data
+    class SNSTopic,Email notification
 ```
 
 ## 前置要求
