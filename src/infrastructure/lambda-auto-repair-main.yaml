@@ -1,0 +1,221 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda Auto-Repair System - Main Infrastructure Template'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  NotificationEmail:
+    Type: String
+    Description: Email address for notifications
+    Default: admin@example.com
+  
+  EnableApprovalWorkflow:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable manual approval workflow for critical environments
+  
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Bedrock model ID for diagnosis
+  
+  KnowledgeBaseName:
+    Type: String
+    Default: lambda-performance-kb
+    Description: Name for the Bedrock Knowledge Base
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+  EnableApproval: !Equals [!Ref EnableApprovalWorkflow, 'true']
+
+Resources:
+  # S3 Bucket for Lambda deployment packages
+  DeploymentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-deployment-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # KMS Key for encryption
+  EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'Encryption key for Lambda Auto-Repair System - ${Environment}'
+      KeyPolicy:
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow CloudWatch Logs
+            Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+
+  EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/lambda-auto-repair-${Environment}'
+      TargetKeyId: !Ref EncryptionKey
+
+  # SNS Topic for notifications
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'lambda-auto-repair-notifications-${Environment}'
+      KmsMasterKeyId: !Ref EncryptionKey
+
+  NotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref NotificationTopic
+      Endpoint: !Ref NotificationEmail
+
+  # EventBridge Custom Bus
+  AutoRepairEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub 'lambda-auto-repair-${Environment}'
+
+  # DynamoDB Tables for audit and tracking
+  DiagnosisTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'lambda-auto-repair-diagnosis-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: diagnosisId
+          AttributeType: S
+        - AttributeName: functionName
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: diagnosisId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: FunctionNameIndex
+          KeySchema:
+            - AttributeName: functionName
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref EncryptionKey
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  RepairTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'lambda-auto-repair-repairs-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: repairId
+          AttributeType: S
+        - AttributeName: functionName
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: repairId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: FunctionNameIndex
+          KeySchema:
+            - AttributeName: functionName
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref EncryptionKey
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+Outputs:
+  DeploymentBucketName:
+    Description: S3 bucket for deployment packages
+    Value: !Ref DeploymentBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentBucket'
+  
+  EncryptionKeyId:
+    Description: KMS Key ID for encryption
+    Value: !Ref EncryptionKey
+    Export:
+      Name: !Sub '${AWS::StackName}-EncryptionKeyId'
+  
+  EncryptionKeyArn:
+    Description: KMS Key ARN for encryption
+    Value: !GetAtt EncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-EncryptionKeyArn'
+  
+  NotificationTopicArn:
+    Description: SNS Topic ARN for notifications
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-NotificationTopic'
+  
+  EventBusArn:
+    Description: EventBridge Custom Bus ARN
+    Value: !GetAtt AutoRepairEventBus.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-EventBus'
+  
+  DiagnosisTableName:
+    Description: DynamoDB table name for diagnosis records
+    Value: !Ref DiagnosisTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DiagnosisTableName'
+  
+  DiagnosisTableArn:
+    Description: DynamoDB table ARN for diagnosis records
+    Value: !GetAtt DiagnosisTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DiagnosisTableArn'
+  
+  RepairTableName:
+    Description: DynamoDB table name for repair records
+    Value: !Ref RepairTable
+    Export:
+      Name: !Sub '${AWS::StackName}-RepairTableName'
+  
+  RepairTableArn:
+    Description: DynamoDB table ARN for repair records
+    Value: !GetAtt RepairTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RepairTableArn'

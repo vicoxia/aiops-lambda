@@ -1,0 +1,38 @@
+graph TD
+    A(Lambda Function) --> B(CloudWatch Logs)
+    A --> C(CloudWatch Metrics)
+
+    C --> D(CloudWatch Alarm Duration Error Timeout)
+    B --> |Logs can also trigger alarms or provide context for analysis| D 
+
+    D --> E(EventBridge)
+    E --> F(Lambda 协调器)
+    E --> G(Step Functions 可选 复杂编排)
+
+    F --> H(Bedrock Agent)
+    G --> H
+
+    H --> I(调用CloudWatch API 获取Metrics Logs)
+    H --> J(访问Bedrock Knowledge Bases 历史案例 Runbooks)
+    H --> K(Bedrock FM 分析 诊断 决策)
+
+    K --> L[修复指令 e.g., 增加内存]
+
+    L --> |Simple workflow| M(Lambda 协调器) 
+    L --> |Complex workflow via Step Functions| G 
+
+    M --> N(调用AWS SDK/CLI UpdateFunctionConfiguration)
+    G --> N
+
+    N --> O[Lambda Function Configuration Updated]
+
+    O --> P(CloudWatch 验证指标恢复)
+    O --> Q[通知 SNS etc. 修复结果]
+
+    classDef ai fill:#9CF,stroke:#333,stroke-width:2px
+    classDef data fill:#F9F,stroke:#333,stroke-width:2px
+    classDef process fill:#CCF,stroke:#333,stroke-width:2px
+
+    class H,I,J,K ai
+    class B,C,D,P,Q data
+    class E,F,G,M,N,O process

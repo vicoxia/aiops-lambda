@@ -1,0 +1,577 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda Auto-Repair System - Functions and Workflows'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  MainStackName:
+    Type: String
+    Description: Name of the main infrastructure stack
+  
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Bedrock model ID for diagnosis
+  
+  KnowledgeBaseId:
+    Type: String
+    Description: Bedrock Knowledge Base ID
+    Default: ''
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+  # IAM Roles
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'lambda-auto-repair-execution-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AutoRepairPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - logs:FilterLogEvents
+                  - logs:GetLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource: '*'
+                Condition:
+                  StringNotEquals:
+                    'lambda:FunctionName': !Sub 'lambda-auto-repair-*-${Environment}'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeAgent
+                  - bedrock:Retrieve
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource:
+                  - Fn::ImportValue: !Sub '${MainStackName}-DiagnosisTableArn'
+                  - Fn::ImportValue: !Sub '${MainStackName}-RepairTableArn'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource:
+                  Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'lambda-auto-repair-stepfunctions-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionsPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:lambda-auto-repair-*-${Environment}'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeAgent
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                  - kms:DescribeKey
+                Resource:
+                  Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+
+  # Lambda Functions
+  DataCollectorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-data-collector-${Environment}'
+      Runtime: nodejs18.x
+      Handler: data-collector.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Data collector function - placeholder implementation');
+            return { statusCode: 200, body: 'Data collected' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DIAGNOSIS_TABLE: 
+            Fn::ImportValue: !Sub '${MainStackName}-DiagnosisTableName'
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 300
+      MemorySize: 512
+
+  DiagnosisFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-diagnosis-${Environment}'
+      Runtime: nodejs18.x
+      Handler: diagnosis.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Diagnosis function - placeholder implementation');
+            return { statusCode: 200, body: 'Diagnosis completed' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          KNOWLEDGE_BASE_ID: !Ref KnowledgeBaseId
+          DIAGNOSIS_TABLE:
+            Fn::ImportValue: !Sub '${MainStackName}-DiagnosisTableName'
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 300
+      MemorySize: 1024
+
+  RepairExecutorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-executor-${Environment}'
+      Runtime: nodejs18.x
+      Handler: repair-executor.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Repair executor function - placeholder implementation');
+            return { statusCode: 200, body: 'Repair executed' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          REPAIR_TABLE:
+            Fn::ImportValue: !Sub '${MainStackName}-RepairTableName'
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 300
+      MemorySize: 512
+
+  VerificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-verifier-${Environment}'
+      Runtime: nodejs18.x
+      Handler: repair-verifier.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Verification function - placeholder implementation');
+            return { statusCode: 200, body: 'Verification completed' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          REPAIR_TABLE:
+            Fn::ImportValue: !Sub '${MainStackName}-RepairTableName'
+          NOTIFICATION_TOPIC:
+            Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 300
+      MemorySize: 512
+
+  CoordinatorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-coordinator-${Environment}'
+      Runtime: nodejs18.x
+      Handler: coordinator.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Coordinator function - placeholder implementation');
+            return { statusCode: 200, body: 'Coordination completed' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DATA_COLLECTOR_FUNCTION: !Ref DataCollectorFunction
+          DIAGNOSIS_FUNCTION: !Ref DiagnosisFunction
+          REPAIR_EXECUTOR_FUNCTION: !Ref RepairExecutorFunction
+          VERIFICATION_FUNCTION: !Ref VerificationFunction
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 900
+      MemorySize: 512
+
+  AdapterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'lambda-auto-repair-adapter-${Environment}'
+      Runtime: nodejs18.x
+      Handler: stepfunctions-adapter.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Step Functions adapter - placeholder implementation');
+            return { statusCode: 200, body: 'Event parsed' };
+          };
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          KMS_KEY_ID:
+            Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyId'
+      KmsKeyArn:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+      Timeout: 60
+      MemorySize: 256
+
+  # Step Functions State Machine
+  AutoRepairStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'lambda-auto-repair-workflow-${Environment}'
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      Definition:
+        Comment: Lambda Auto-Repair Workflow with Event Adapter
+        StartAt: ParseAlarmEvent
+        States:
+          ParseAlarmEvent:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref AdapterFunction
+              Payload.$: $
+            Next: CollectMetricsAndLogs
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyError
+                ResultPath: $.error
+          CollectMetricsAndLogs:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref DataCollectorFunction
+              Payload:
+                functionName.$: $.Payload.functionName
+                alarmName.$: $.Payload.alarmName
+                timestamp.$: $.Payload.timestamp
+            Next: DiagnoseIssue
+            Retry:
+              - ErrorEquals: 
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyError
+                ResultPath: $.error
+          DiagnoseIssue:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref DiagnosisFunction
+              Payload:
+                functionName.$: $.Payload.functionName
+                alarmName.$: $.Payload.alarmName
+                alarmReason.$: $.Payload.alarmReason
+                dataCollection.$: $.Payload
+            Next: DetermineAction
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyError
+                ResultPath: $.error
+          DetermineAction:
+            Type: Choice
+            Choices:
+              - Variable: $.Payload.diagnosisResult.isMemoryIssue
+                BooleanEquals: true
+                Next: CheckApprovalRequired
+            Default: NotifyNoAction
+          CheckApprovalRequired:
+            Type: Choice
+            Choices:
+              - Variable: $.Payload.requiresApproval
+                BooleanEquals: true
+                Next: WaitForApproval
+            Default: ExecuteRepair
+          WaitForApproval:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: !Ref CoordinatorFunction
+              Payload:
+                taskToken.$: $$.Task.Token
+                action: requestApproval
+                input.$: $
+            Next: ExecuteRepair
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyApprovalDenied
+                ResultPath: $.error
+          ExecuteRepair:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref RepairExecutorFunction
+              Payload.$: $
+            Next: VerifyRepair
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyRepairFailed
+                ResultPath: $.error
+          VerifyRepair:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref VerificationFunction
+              Payload.$: $
+            Next: NotifySuccess
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: NotifyVerificationFailed
+                ResultPath: $.error
+          NotifySuccess:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - Successful Repair
+              Message.$: $.Payload
+            End: true
+          NotifyNoAction:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - No Action Required
+              Message.$: $.Payload
+            End: true
+          NotifyError:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - Error Occurred
+              Message.$: $.error
+            End: true
+          NotifyApprovalDenied:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - Approval Denied
+              Message.$: $.error
+            End: true
+          NotifyRepairFailed:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - Repair Failed
+              Message.$: $.error
+            End: true
+          NotifyVerificationFailed:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn:
+                Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+              Subject: Lambda Auto-Repair - Verification Failed
+              Message.$: $.error
+            End: true
+
+  # EventBridge Rules
+  CloudWatchAlarmRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'lambda-auto-repair-alarm-rule-${Environment}'
+      # 使用默认事件总线，因为CloudWatch告警事件发送到默认总线
+      EventPattern:
+        source: ["aws.cloudwatch"]
+        detail-type: ["CloudWatch Alarm State Change"]
+        detail:
+          state:
+            value: ["ALARM"]
+      State: ENABLED
+      Targets:
+        - Arn: !Ref AutoRepairStateMachine
+          Id: "StepFunctionsTarget"
+          RoleArn: !GetAtt EventBridgeExecutionRole.Arn
+
+  # EventBridge execution role for Step Functions
+  EventBridgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'lambda-auto-repair-eventbridge-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgePermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref AutoRepairStateMachine
+
+  # CloudWatch Alarms for monitoring the auto-repair system itself
+  CoordinatorErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'lambda-auto-repair-coordinator-errors-${Environment}'
+      AlarmDescription: 'Monitor coordinator function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CoordinatorFunction
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+Outputs:
+  DataCollectorFunctionArn:
+    Description: Data Collector Function ARN
+    Value: !GetAtt DataCollectorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DataCollectorFunction'
+  
+  DiagnosisFunctionArn:
+    Description: Diagnosis Function ARN
+    Value: !GetAtt DiagnosisFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DiagnosisFunction'
+  
+  RepairExecutorFunctionArn:
+    Description: Repair Executor Function ARN
+    Value: !GetAtt RepairExecutorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RepairExecutorFunction'
+  
+  VerificationFunctionArn:
+    Description: Verification Function ARN
+    Value: !GetAtt VerificationFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-VerificationFunction'
+  
+  CoordinatorFunctionArn:
+    Description: Coordinator Function ARN
+    Value: !GetAtt CoordinatorFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CoordinatorFunction'
+  
+  StateMachineArn:
+    Description: Step Functions State Machine ARN
+    Value: !Ref AutoRepairStateMachine
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachine'

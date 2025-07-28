@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda Auto-Repair System - Monitoring and Alarms'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  MainStackName:
+    Type: String
+    Description: Name of the main infrastructure stack
+  
+  MonitoredFunctionNames:
+    Type: CommaDelimitedList
+    Description: List of Lambda function names to monitor
+    Default: ''
+  
+  DurationThreshold:
+    Type: Number
+    Default: 30000
+    Description: Duration threshold in milliseconds
+  
+  ErrorThreshold:
+    Type: Number
+    Default: 1
+    Description: Error count threshold
+  
+  TimeoutThreshold:
+    Type: Number
+    Default: 1
+    Description: Timeout count threshold
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+  HasMonitoredFunctions: !Not [!Equals [!Join ['', !Ref MonitoredFunctionNames], '']]
+
+Resources:
+  # CloudWatch Log Group for auto-repair system
+  AutoRepairLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/auto-repair-${Environment}'
+      RetentionInDays: !If [IsProd, 30, 7]
+      KmsKeyId:
+        Fn::ImportValue: !Sub '${MainStackName}-EncryptionKeyArn'
+
+  # Custom CloudWatch Metrics for Lambda functions
+  LambdaDurationAlarmTemplate:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMonitoredFunctions
+    Properties:
+      AlarmName: !Sub 'lambda-duration-alarm-template-${Environment}'
+      AlarmDescription: 'Template for Lambda function duration alarms'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: !Ref DurationThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+  LambdaErrorAlarmTemplate:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMonitoredFunctions
+    Properties:
+      AlarmName: !Sub 'lambda-error-alarm-template-${Environment}'
+      AlarmDescription: 'Template for Lambda function error alarms'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: !Ref ErrorThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+  LambdaTimeoutAlarmTemplate:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMonitoredFunctions
+    Properties:
+      AlarmName: !Sub 'lambda-timeout-alarm-template-${Environment}'
+      AlarmDescription: 'Template for Lambda function timeout alarms'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 299000  # Just under 5 minutes (300 seconds)
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+  # CloudWatch Dashboard
+  AutoRepairDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub 'lambda-auto-repair-${Environment}'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "lambda-auto-repair-coordinator-${Environment}" ],
+                  [ ".", "Errors", ".", "." ],
+                  [ ".", "Duration", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Auto-Repair System Metrics",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/StepFunctions", "ExecutionsSucceeded", "StateMachineArn", "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:lambda-auto-repair-workflow-${Environment}" ],
+                  [ ".", "ExecutionsFailed", ".", "." ],
+                  [ ".", "ExecutionsStarted", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Step Functions Executions",
+                "period": 300
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 6,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/lambda-auto-repair-coordinator-${Environment}'\n| fields @timestamp, @message\n| sort @timestamp desc\n| limit 100",
+                "region": "${AWS::Region}",
+                "title": "Recent Auto-Repair Logs",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+  # Composite Alarm for overall system health
+  AutoRepairSystemHealthAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Condition: HasMonitoredFunctions
+    Properties:
+      AlarmName: !Sub 'lambda-auto-repair-system-health-${Environment}'
+      AlarmDescription: 'Overall health of the auto-repair system'
+      AlarmRule: !Sub 'ALARM("lambda-duration-alarm-template-${Environment}") OR ALARM("lambda-error-alarm-template-${Environment}")'
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+  # Custom Metric Filter for tracking repair actions
+  RepairActionMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref AutoRepairLogGroup
+      FilterPattern: '[timestamp, requestId, level="INFO", message="REPAIR_EXECUTED", ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub 'LambdaAutoRepair/${Environment}'
+          MetricName: RepairActionsExecuted
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # Custom Metric Filter for tracking diagnosis results
+  DiagnosisMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref AutoRepairLogGroup
+      FilterPattern: '[timestamp, requestId, level="INFO", message="DIAGNOSIS_COMPLETED", result, ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub 'LambdaAutoRepair/${Environment}'
+          MetricName: DiagnosisCompleted
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # Alarm for repair action frequency
+  RepairFrequencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'lambda-auto-repair-frequency-${Environment}'
+      AlarmDescription: 'Monitor frequency of repair actions'
+      MetricName: RepairActionsExecuted
+      Namespace: !Sub 'LambdaAutoRepair/${Environment}'
+      Statistic: Sum
+      Period: 3600  # 1 hour
+      EvaluationPeriods: 1
+      Threshold: !If [IsProd, 10, 20]  # Lower threshold for prod
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Fn::ImportValue: !Sub '${MainStackName}-NotificationTopic'
+
+  # EventBridge Rule for custom events
+  CustomEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'lambda-auto-repair-custom-events-${Environment}'
+      EventBusName:
+        Fn::ImportValue: !Sub '${MainStackName}-EventBus'
+      EventPattern:
+        source: ["lambda.auto-repair"]
+        detail-type: ["Repair Action", "Diagnosis Result", "Verification Result"]
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AutoRepairLogGroup.Arn
+          Id: "LogGroupTarget"
+
+Outputs:
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AutoRepairDashboard}'
+  
+  LogGroupName:
+    Description: CloudWatch Log Group Name
+    Value: !Ref AutoRepairLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroup'
+  
+  SystemHealthAlarmArn:
+    Condition: HasMonitoredFunctions
+    Description: System Health Composite Alarm ARN
+    Value: !GetAtt AutoRepairSystemHealthAlarm.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SystemHealthAlarm'

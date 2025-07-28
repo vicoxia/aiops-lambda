@@ -1,0 +1,19 @@
+{
+  "Parameters": {
+    "Environment": "dev",
+    "NotificationEmail": "dev-team@example.com",
+    "EnableApprovalWorkflow": "false",
+    "BedrockModelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "KnowledgeBaseName": "lambda-performance-kb-dev",
+    "DurationThreshold": 45000,
+    "ErrorThreshold": 2,
+    "TimeoutThreshold": 2,
+    "MonitoredFunctionNames": []
+  },
+  "Tags": {
+    "Environment": "dev",
+    "Project": "lambda-auto-repair",
+    "Owner": "dev-team",
+    "CostCenter": "engineering"
+  }
+}

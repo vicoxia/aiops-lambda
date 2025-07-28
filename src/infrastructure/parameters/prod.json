@@ -1,0 +1,21 @@
+{
+  "Parameters": {
+    "Environment": "prod",
+    "NotificationEmail": "ops-team@example.com",
+    "EnableApprovalWorkflow": "true",
+    "BedrockModelId": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "KnowledgeBaseName": "lambda-performance-kb-prod",
+    "DurationThreshold": 30000,
+    "ErrorThreshold": 1,
+    "TimeoutThreshold": 1,
+    "MonitoredFunctionNames": []
+  },
+  "Tags": {
+    "Environment": "prod",
+    "Project": "lambda-auto-repair",
+    "Owner": "platform-team",
+    "CostCenter": "operations",
+    "Backup": "required",
+    "Monitoring": "critical"
+  }
+}
