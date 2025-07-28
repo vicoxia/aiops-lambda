@@ -76,7 +76,11 @@ Lambda自动修复系统使用AWS CloudFormation模板部署，组织为三个�
 ### 3. 验证部署
 
 ```bash
+# 基础验证
 ./validate-deployment.sh --environment dev
+
+# Step Functions架构验证
+../validate-stepfunctions-deployment.sh dev us-east-1
 ```
 
 ## 部署选项
@@ -154,6 +158,7 @@ Lambda自动修复系统使用AWS CloudFormation模板部署，组织为三个�
 - 用于系统监控的CloudWatch告警
 
 **Lambda函数：**
+- `stepfunctions-adapter` - 解析EventBridge事件并适配Step Functions格式
 - `data-collector` - 从CloudWatch收集指标和日志
 - `diagnosis` - 使用Bedrock执行智能诊断
 - `executor` - 对Lambda函数执行修复操作
@@ -240,12 +245,23 @@ Lambda自动修复系统使用AWS CloudFormation模板部署，组织为三个�
 ```bash
 # 验证所有模板
 aws cloudformation validate-template --template-body file://lambda-auto-repair-main.yaml
+aws cloudformation validate-template --template-body file://lambda-auto-repair-functions.yaml
+aws cloudformation validate-template --template-body file://lambda-auto-repair-monitoring.yaml
 
 # 检查堆栈状态
 aws cloudformation describe-stacks --stack-name lambda-auto-repair-main-dev
+aws cloudformation describe-stacks --stack-name lambda-auto-repair-functions-dev
+aws cloudformation describe-stacks --stack-name lambda-auto-repair-monitoring-dev
 
 # 测试Lambda函数
 aws lambda invoke --function-name lambda-auto-repair-coordinator-dev --payload '{}' response.json
+
+# 验证Step Functions状态机
+aws stepfunctions list-state-machines --query 'stateMachines[?contains(name, `lambda-auto-repair`)]'
+
+# 运行完整验证脚本
+./validate-deployment.sh --environment dev
+../validate-stepfunctions-deployment.sh dev us-east-1
 ```
 
 ## 清理资源
@@ -299,6 +315,10 @@ aws cloudformation delete-stack --stack-name lambda-auto-repair-main-dev
 
 如有问题和疑问：
 - 检查CloudWatch日志获取详细错误信息
-- 使用验证脚本验证系统健康状态
+- 使用验证脚本验证系统健康状态：
+  - `./validate-deployment.sh --environment <env>`
+  - `../validate-stepfunctions-deployment.sh <env> <region>`
 - 查看CloudFormation堆栈事件了解部署问题
 - 查阅主项目文档了解系统行为
+- 参考[部署指南](deployment-guide.md)和[操作手册](operations-manual.md)
+- 查看[实现状态报告](../../IMPLEMENTATION_STATUS_REPORT.md)了解系统完成度
